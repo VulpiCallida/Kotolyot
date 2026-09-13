@@ -133,14 +133,14 @@ test('delayed SDK still receives ready and start exactly once', async () => {
 
 test('Musia body collides at the visible obstacle edge and fits a clear gap', () => {
   const g=game();g.load();g.run("selectCharacter('musia');resetGame();cat.y=200");
-  // Body is x=89..159, y=212..276; obstacle padding is 15.
+  // Body is x=89..159, y=200..288; obstacle padding is 15.
   assert.equal(g.run('isCollidingWithObstacle({x:143,topHeight:213,bottomY:450})'),true);
   assert.equal(g.run('isCollidingWithObstacle({x:144,topHeight:213,bottomY:450})'),false);
-  assert.equal(g.run('isCollidingWithObstacle({x:100,topHeight:211,bottomY:277})'),false);
-  assert.equal(g.run('isCollidingWithObstacle({x:100,topHeight:211,bottomY:275})'),true);
-  // Valencia retains the original bounds; Musia no longer slips through the same overlap.
+  assert.equal(g.run('isCollidingWithObstacle({x:100,topHeight:199,bottomY:289})'),false);
+  assert.equal(g.run('isCollidingWithObstacle({x:100,topHeight:199,bottomY:287})'),true);
+  // Valencia uses exactly the same collision bounds.
   g.run("endGame();selectCharacter('valencia');resetGame();cat.y=200");
-  assert.equal(g.run('isCollidingWithObstacle({x:143,topHeight:213,bottomY:450})'),false);
+  assert.equal(g.run('isCollidingWithObstacle({x:143,topHeight:213,bottomY:450})'),true);
 });
 
 test('Nyusia matches Musia collision bounds and retains them across poses', () => {
@@ -149,8 +149,8 @@ test('Nyusia matches Musia collision bounds and retains them across poses', () =
     g.run(`cat.velocityY=${velocity}`);
     assert.equal(g.run('isCollidingWithObstacle({x:143,topHeight:213,bottomY:450})'),true);
     assert.equal(g.run('isCollidingWithObstacle({x:144,topHeight:213,bottomY:450})'),false);
-    assert.equal(g.run('isCollidingWithObstacle({x:100,topHeight:211,bottomY:277})'),false);
-    assert.equal(g.run('isCollidingWithObstacle({x:100,topHeight:211,bottomY:275})'),true);
+    assert.equal(g.run('isCollidingWithObstacle({x:100,topHeight:199,bottomY:289})'),false);
+    assert.equal(g.run('isCollidingWithObstacle({x:100,topHeight:199,bottomY:287})'),true);
   }
   for(const [pose,crop] of Object.entries(g.json('CHARACTER_POSE_CROPS.nyusia'))) {
     const data=fs.readFileSync(path.join(root,g.run(`ASSETS.nyusia.${pose}`)));
@@ -209,4 +209,21 @@ test('ad closing preserves visibility pause and does not restart a finished run'
   g.run('document.hidden=false;resumeFromPause()');assert.equal(g.run('isActiveGameplay()'),true);
   g.run('endGame()');g.platform('game_api_pause');g.platform('game_api_resume');
   assert.equal(g.run('gameState'),'gameOver');assert.equal(g.run('isGameplayStarted'),false);
+});
+
+
+test('all heroes detect ear overlap and retain a forgiving clear corridor', () => {
+  for (const id of ['valencia','musia','nyusia']) {
+    for (const velocity of [-8.5,0,4]) {
+      const g=game();g.load();g.run(`selectCharacter('${id}');resetGame();cat.y=200;cat.velocityY=${velocity}`);
+      assert.equal(g.run('isCollidingWithObstacle({x:100,topHeight:201,bottomY:450})'),true);
+      assert.equal(g.run('isCollidingWithObstacle({x:100,topHeight:199,bottomY:289})'),false);
+      g.run('obstacles=[{x:100,topHeight:201,bottomY:450,passed:false}];obstacleElapsedTime=0;update(0)');
+      assert.equal(g.run('gameState'),'gameOver');
+      for (const score of [0,30,100]) {
+        const gap=g.run(`getDifficultyForScore(${score}).gap`);
+        assert.ok(gap-88>=131,'minimum vertical clearance must remain forgiving');
+      }
+    }
+  }
 });

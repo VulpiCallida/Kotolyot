@@ -101,8 +101,8 @@ function checkObstacleCollision(
   obstacle,
   {
     obstacleWidth = 115,
-    hitboxPaddingX = 22,
-    hitboxPaddingY = 22,
+    hitboxPaddingX = 9,
+    hitboxPaddingY = 0,
     obstaclePaddingX = 15
   } = {}
 ) {
@@ -132,8 +132,8 @@ const DIFFICULTY_CONFIG = {
   minSpawnInterval: 1150, // не чаще, чем раз в 1150мс
   spawnIntervalStep: 15, // -15мс за каждое очко
 
-  baseGap: 225,
-  minGap: 195, // с запасом покрывает хитбокс кота (44px) даже на максимуме сложности
+  baseGap: 249,
+  minGap: 219, // +24px preserves clearance after increasing collision height from 64 to 88.
   gapStep: 1 // -1px за каждое очко
 };
 
@@ -903,8 +903,8 @@ function update(deltaTime) {
 function isCollidingWithObstacle(obstacle) {
   return checkObstacleCollision(cat, obstacle, {
     obstacleWidth: obstacleSettings.width,
-    hitboxPaddingX: ["musia", "nyusia"].includes(selectedCharacter) ? 9 : 22,
-    hitboxPaddingY: ["musia", "nyusia"].includes(selectedCharacter) ? 12 : 22
+    hitboxPaddingX: 9,
+    hitboxPaddingY: 0
   });
 }
 
@@ -1017,6 +1017,12 @@ function drawGround() {
 // Visible silhouette bounds measured from each original character PNG.
 // Crop only while drawing; the original artwork remains untouched.
 const CHARACTER_POSE_CROPS = {
+  valencia: {
+    catIdle: { x: 12, y: 12, width: 922, height: 461 },
+    catJump: { x: 19, y: 24, width: 1431, height: 1010 },
+    catFall: { x: 12, y: 12, width: 842, height: 622 },
+    catSleep: { x: 12, y: 12, width: 742, height: 509 }
+  },
   musia: {
   catIdle: { x: 39, y: 213, width: 1158, height: 633 },
   catJump: { x: 75, y: 240, width: 1017, height: 729 },

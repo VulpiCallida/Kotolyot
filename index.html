@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cat Flight</title>
+  <link rel="stylesheet" href="style.css" />
+
+  <!-- Yandex Games SDK -->
+  <script src="/sdk.js"></script>
+</head>
+<body>
+  <main class="page">
+    <h1 id="pageTitle" class="sr-only">Cat Flight</h1>
+
+    <div class="game-stage">
+    <canvas
+      id="gameCanvas"
+      width="420"
+      height="640"
+      role="img"
+      tabindex="0"
+      draggable="false"
+      aria-labelledby="pageTitle"
+      aria-describedby="gameInstructions gameStatus"
+    ></canvas>
+    <section id="characterMenu" class="character-menu" aria-labelledby="menuTitle" hidden>
+      <div class="menu-panel">
+        <h2 id="menuTitle"></h2>
+        <p id="menuSubtitle" class="menu-subtitle"></p>
+        <p id="runResult" class="run-result" hidden></p>
+        <h3 id="heroLabel"></h3>
+        <div id="heroPicker" class="hero-picker" role="group" aria-labelledby="heroLabel"></div>
+        <button id="playButton" class="play-button" type="button"></button>
+        <p id="menuHint" class="menu-hint"></p>
+      </div>
+    </section>
+    </div>
+
+    <p id="gameInstructions" class="sr-only"></p>
+    <p id="gameStatus" class="sr-only" aria-live="polite" aria-atomic="true"></p>
+  </main>
+
+  <script src="game.js"></script>
+</body>
+</html>

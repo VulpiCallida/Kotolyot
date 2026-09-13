@@ -1,0 +1,160 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+.page,
+canvas {
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+html,
+body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  font-family: Arial, sans-serif;
+  background: #f2e2c8;
+  color: #222;
+  overscroll-behavior: none;
+  touch-action: none;
+}
+
+.page {
+  width: 100%;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+canvas {
+  display: block;
+  width: min(420px, 100vw - 20px);
+  height: auto;
+  max-height: calc(100dvh - 20px);
+  aspect-ratio: 420 / 640;
+  background: #f7ead7;
+  border: 3px solid #6b4528;
+  border-radius: 16px;
+  touch-action: none;
+  outline: none;
+}
+
+
+canvas:focus-visible {
+  box-shadow: 0 0 0 3px rgba(107, 69, 40, 0.35);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Keep the canvas and the accessible menu on the same proportional stage. */
+.game-stage {
+  position: relative;
+  container-type: inline-size;
+  width: min(100vw, calc(100dvh * 420 / 640));
+  aspect-ratio: 420 / 640;
+  flex: none;
+}
+.game-stage canvas {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+}
+.character-menu {
+  position: absolute;
+  inset: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 14px;
+}
+.character-menu[hidden], [hidden] { display: none; }
+.menu-panel {
+  width: 92%;
+  padding: 6cqw 3cqw 4cqw;
+  border: 1px solid rgba(145, 106, 72, .28);
+  border-radius: 6cqw;
+  background: rgba(255, 248, 238, .97);
+  color: #6b4528;
+  text-align: center;
+  box-shadow: 0 3cqw 8cqw rgba(60, 35, 15, .18);
+}
+.menu-panel h2 { font-size: 8cqw; margin: 0 0 2cqw; line-height: 1.1; }
+.menu-subtitle { font-size: 3.8cqw; line-height: 1.4; margin: 0 auto 4cqw; max-width: 67cqw; }
+.menu-panel h3 { font-size: 4.5cqw; margin: 4cqw 0 3cqw; }
+.run-result { font-size: 5cqw; font-weight: bold; margin: 3cqw 0; }
+.hero-picker { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2cqw; }
+.hero-card {
+  appearance: none;
+  font: inherit;
+  color: inherit;
+  background: #f6e9d6;
+  border: 2px solid transparent;
+  border-radius: 3cqw;
+  padding: 1cqw 0 3cqw;
+  cursor: pointer;
+  min-width: 0;
+}
+.hero-card[aria-pressed="true"] { border-color: #965c30; background: #f9dca9; box-shadow: 0 1cqw 2cqw #6b452822; }
+.hero-card:hover, .hero-card:focus-visible { background: #f9dca9; }
+.hero-card[data-hero="musia"]:hover, .hero-card[data-hero="musia"]:focus-visible, .hero-card[data-hero="musia"][aria-pressed="true"] { background: #f8dce5; }
+.hero-card[data-hero="nyusia"]:hover, .hero-card[data-hero="nyusia"]:focus-visible, .hero-card[data-hero="nyusia"][aria-pressed="true"] { background: #dfc4ac; }
+.hero-card img { display: block; width: 100%; height: 23cqw; object-fit: contain; pointer-events: none; }
+.hero-card span { display: block; }
+.hero-name { font-size: clamp(14px, 4.1cqw, 30px); font-weight: bold; margin-bottom: 2cqw; }
+.hero-best { font-size: clamp(12px, 3.4cqw, 26px); }
+.hero-last { font-size: clamp(12px, 2.6cqw, 20px); margin-top: 1.4cqw; }
+.play-button {
+  font: bold 5.4cqw Arial, sans-serif;
+  color: #5a351e;
+  background: #f3d8a8;
+  border: 1px solid #c5955c;
+  border-radius: 4cqw;
+  width: 60%;
+  min-height: 13cqw;
+  margin-top: 6cqw;
+  cursor: pointer;
+}
+.play-button:hover { background: #f5ca85; }
+.hero-card:focus-visible, .play-button:focus-visible { outline: 3px solid #6b4528; outline-offset: 3px; }
+.menu-hint { color: #8c6a50; font-size: 3.6cqw; margin: 4cqw 0 0; }
+
+.play-button:disabled { opacity: .55; cursor: default; }
+/* A short landscape window keeps the portrait playfield undistorted, but
+   uses the available screen width for readable menus and large controls. */
+@media (orientation: landscape) and (max-height: 500px) {
+  .character-menu { position: fixed; inset: 0; background: rgba(76,48,28,.35); }
+  .menu-panel { width: min(96vw, 620px); padding: 10px 14px; border-radius: 18px; }
+  .menu-panel h2 { font-size: 24px; margin: 0 0 4px; }
+  .menu-subtitle { font-size: 14px; line-height: 1.2; margin: 0 0 6px; max-width: none; }
+  .menu-panel h3 { font-size: 16px; margin: 6px 0; }
+  .run-result { font-size: 16px; margin: 4px 0; }
+  .hero-picker { gap: 10px; }
+  .hero-card { padding: 2px 4px 6px; border-radius: 10px; }
+  .hero-card img { height: clamp(36px, 14dvh, 66px); }
+  .hero-name { font-size: 15px; margin-bottom: 3px; }
+  .hero-best, .hero-last { font-size: 12px; margin-top: 2px; }
+  .play-button { font-size: 18px; min-height: 44px; margin-top: 8px; border-radius: 12px; }
+  .menu-hint { font-size: 12px; margin: 6px 0 0; }
+}
+@media (orientation: landscape) and (max-height: 360px) {
+  .menu-subtitle, .menu-hint { display: none; }
+}

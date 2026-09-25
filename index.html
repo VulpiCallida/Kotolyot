@@ -14,6 +14,12 @@
     <h1 id="pageTitle" class="sr-only">Cat Flight</h1>
 
     <div class="game-stage">
+    <div id="loadingScreen" class="loading-screen" aria-hidden="true">
+      <div id="loadingTitle" class="loading-title">Cat Flight</div>
+      <img class="loading-icon" src="icon.png" alt="" draggable="false" fetchpriority="high" />
+      <div class="loading-label"><span id="loadingLabel">Loading</span><span class="loading-dots"><span>.</span><span>.</span><span>.</span></span></div>
+      <div class="loading-developer">Krovikov Family</div>
+    </div>
     <canvas
       id="gameCanvas"
       width="420"
@@ -31,7 +37,10 @@
         <p id="runResult" class="run-result" hidden></p>
         <h3 id="heroLabel"></h3>
         <div id="heroPicker" class="hero-picker" role="group" aria-labelledby="heroLabel"></div>
-        <button id="playButton" class="play-button" type="button"></button>
+        <div class="menu-actions">
+          <button id="playButton" class="play-button" type="button"></button>
+          <button id="soundButton" class="sound-button" type="button" aria-pressed="true"></button>
+        </div>
         <p id="menuHint" class="menu-hint"></p>
       </div>
     </section>

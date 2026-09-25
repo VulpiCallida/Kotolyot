@@ -158,3 +158,106 @@ canvas:focus-visible {
 @media (orientation: landscape) and (max-height: 360px) {
   .menu-subtitle, .menu-hint { display: none; }
 }
+
+/* The loading artwork appears with the HTML, before the game assets finish. */
+.loading-screen {
+  position: absolute;
+  inset: 3px;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: min(4cqw, 3dvh);
+  border-radius: 13px;
+  background: radial-gradient(ellipse at 50% 38%, #fff8eb, #eed8b8);
+  color: #6b4528;
+  pointer-events: none;
+}
+.loading-icon {
+  display: block;
+  width: min(48cqw, 34dvh, 280px);
+  aspect-ratio: 1;
+  object-fit: contain;
+  border-radius: 18%;
+  box-shadow: 0 8px 28px #6b452824;
+}
+.loading-developer {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(14px, 4.4cqw, 30px);
+  margin-top: min(2cqw, 1.5dvh);
+  font-style: italic;
+  font-weight: bold;
+  letter-spacing: -.025em;
+  line-height: 1.25;
+  text-align: center;
+}
+.loading-label {
+  margin-top: min(3cqw, 2dvh);
+  font-size: clamp(20px, 6.5cqw, 42px);
+  font-weight: 700;
+  line-height: 1.2;
+  color: #6b4528;
+}
+
+.loading-dots { display: inline-block; white-space: nowrap; }
+.loading-dots span { animation: loading-dot-one 1.4s step-end infinite; }
+.loading-dots span:nth-child(2) { animation-name: loading-dot-two; }
+.loading-dots span:nth-child(3) { animation-name: loading-dot-three; }
+@keyframes loading-dot-one { 0% { opacity: 0; } 25% { opacity: 1; } }
+@keyframes loading-dot-two { 0% { opacity: 0; } 50% { opacity: 1; } }
+@keyframes loading-dot-three { 0% { opacity: 0; } 75% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .loading-dots span { animation: none; }
+}
+
+.loading-title {
+  font-size: clamp(22px, 8cqw, 52px);
+  font-weight: 700;
+  line-height: 1.1;
+  text-align: center;
+}
+
+/* Keep the loading overlay hidden after the assets have settled. */
+.loading-screen[hidden] { display: none; }
+
+
+.menu-actions { display: flex; align-items: stretch; justify-content: center; gap: 2cqw; margin-top: 6cqw; }
+.menu-actions .play-button { margin-top: 0; }
+.sound-button {
+  width: 32%;
+  min-height: 44px;
+  padding: 6px;
+  border: 1px solid #c5955c;
+  border-radius: 4cqw;
+  background: #f7ead7;
+  color: #5a351e;
+  font: bold clamp(12px, 3cqw, 22px) Arial, sans-serif;
+  cursor: pointer;
+}
+.sound-button:hover { background: #f3d8a8; }
+.sound-button:focus-visible { outline: 3px solid #6b4528; outline-offset: 3px; }
+@media (orientation: landscape) and (max-height: 500px) {
+  .menu-actions { margin-top: 8px; gap: 10px; }
+  .sound-button { font-size: 14px; border-radius: 12px; }
+}
+
+
+/* Wide playfield; the logical height and all physics stay unchanged. */
+@media (min-width: 768px) and (orientation: landscape) {
+  .game-stage { width: min(100vw, calc(100dvh * 16 / 9)); height: min(100dvh, calc(100vw * 9 / 16)); aspect-ratio: 16 / 9; }
+  .game-stage canvas { border: 0; border-radius: 0; }
+  .menu-panel { width: min(560px, 80dvh); container-type: inline-size; padding: 20px 16px; border-radius: 24px; }
+  .menu-panel h2 { font-size: clamp(24px, 6cqw, 42px); }
+  .loading-screen { border-radius: 0; }
+}
+@media (min-width: 768px) and (orientation: landscape) and (max-height: 500px) {
+  .menu-panel { width: min(96vw, 620px); padding: 10px 14px; }
+  .menu-panel h2 { font-size: 24px; }
+}
+
+
+/* Compensate for transparent margins in the selection portraits. */
+.hero-card { overflow: hidden; }
+.hero-card[data-hero="musia"][data-pose="catIdle"] .hero-portrait { transform: scale(1.4); }
+.hero-card[data-hero="nyusia"][data-pose="catIdle"] .hero-portrait { transform: scale(1.06); }

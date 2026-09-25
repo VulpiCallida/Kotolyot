@@ -31,6 +31,11 @@ function game(saved = new Map(), { blocked = false, sdk = false, language = 'ru'
     window: { addEventListener: noop }, navigator: { language }, location: { href: 'test' },
     localStorage: { getItem: k => { if (blocked) throw Error('blocked'); return saved.get(k) ?? null; }, setItem: (k, v) => { if (blocked) throw Error('blocked'); saved.set(k, v); } },
     performance: { now: () => 1000 }, requestAnimationFrame: () => 1, cancelAnimationFrame: noop,
+    Audio: class {
+      constructor(src) { this.src=src; this.paused=true; this.currentTime=0; this.playCalls=0; }
+      play() { this.paused=false; this.playCalls++; return Promise.resolve(); }
+      pause() { this.paused=true; }
+    },
     Image: class { constructor() { pendingImages.push(this); this.complete = true; this.naturalWidth = 100; } }
   };
   if (sdk) sandbox.YaGames = { init: () => new Promise(resolve => { resolveSDK = () => resolve({ on: (name, callback) => sdkListeners.set(name, callback), features: { LoadingAPI: { ready: () => sdkCalls.push('ready') }, GameplayAPI: { start: () => sdkCalls.push('start'), stop: () => sdkCalls.push('stop') } } }); }) };
@@ -225,5 +230,164 @@ test('all heroes detect ear overlap and retain a forgiving clear corridor', () =
         assert.ok(gap-88>=131,'minimum vertical clearance must remain forgiving');
       }
     }
+  }
+});
+
+
+test('restart ads wait 180 seconds and repeated input cannot request another ad', () => {
+  const g=game();g.load();
+  g.run('globalThis.adCalls=0;globalThis.now=1000;performance.now=()=>now;ysdk={adv:{showFullscreenAdv:({callbacks})=>{adCalls++;globalThis.adCallbacks=callbacks}}};requestGameStart();endGame();now=180999;requestGameStart()');
+  assert.equal(g.run('adCalls'),0);
+  g.run('endGame();now=181000;requestGameStart();requestGameStart();jump();resetGame();selectCharacter("musia")');
+  assert.equal(g.run('adCalls'),1);
+  assert.equal(g.run('gameState'),'gameOver');
+  assert.equal(g.run('selectedCharacter'),'valencia');
+  assert.equal(g.get('playButton').disabled,true);
+  g.run('now=190000;adCallbacks.onClose(true)');
+  assert.equal(g.run('gameState'),'playing');
+  g.run('endGame();now=369999;requestGameStart()');
+  assert.equal(g.run('adCalls'),1);
+  g.run('endGame();now=370000;requestGameStart()');
+  assert.equal(g.run('adCalls'),2);
+});
+
+test('ad close and platform resume work in either order, including hidden tabs and failures', () => {
+  for(const closeFirst of [true,false]) {
+    const g=game();g.load();
+    g.run('performance.now=()=>200000;ysdk={adv:{showFullscreenAdv:({callbacks})=>{globalThis.adCallbacks=callbacks;pauseFromPlatform()}}};resetGame();endGame();requestGameStart()');
+    if(closeFirst) {
+      g.run('adCallbacks.onClose(true)');assert.equal(g.run('gameState'),'gameOver');g.run('resumeFromPlatform()');
+    } else {
+      g.run('resumeFromPlatform()');assert.equal(g.run('gameState'),'gameOver');g.run('adCallbacks.onClose(true)');
+    }
+    assert.equal(g.run('gameState'),'playing');
+    g.run('score=7;adCallbacks.onClose(true);adCallbacks.onError({})');assert.equal(g.run('score'),7);
+  }
+  for(const mode of ['error','throw','unavailable','not-shown']) {
+    const g=game();g.load();
+    g.run('performance.now=()=>200000;resetGame();endGame()');
+    if(mode==='throw') g.run('ysdk={adv:{showFullscreenAdv:()=>{throw Error("offline")}}}');
+    else if(mode!=='unavailable') g.run('ysdk={adv:{showFullscreenAdv:({callbacks})=>{globalThis.adCallbacks=callbacks}}}');
+    g.run('document.hidden=true;requestGameStart()');
+    if(mode==='error') g.run('adCallbacks.onError({})');
+    if(mode==='not-shown') g.run('adCallbacks.onClose(false)');
+    assert.equal(g.run('gameState'),'playing');
+    assert.equal(g.run('isActiveGameplay()'),false);
+    assert.equal(g.run('pendingAd'),null);
+  }
+});
+
+
+test('room backgrounds retain aspect ratio and start at the requested source positions', () => {
+  const g=game();
+  for (const [id,start] of [['valencia',0],['musia',0.25],['nyusia',0.5]]) {
+    const data=fs.readFileSync(path.join(root,g.run(`ASSETS.${id}.background`)));
+    const width=data.readUInt32BE(16),height=data.readUInt32BE(20);
+    const crop=g.json(`getBackgroundCrop('${id}',${width},${height})`);
+    assert.equal(crop.x,width*start);
+    assert.ok(Math.abs(crop.width/crop.height-420/640)<1e-10);
+    assert.ok(crop.x+crop.width<=width);
+    assert.equal(crop.y,0);
+    assert.equal(crop.height,height);
+  }
+});
+
+
+test('music plays in menus and flight, restarts for a run and pauses for ads', () => {
+  const g=game();g.load();
+  assert.ok(fs.existsSync(path.join(root,g.run('gameMusic.src'))));
+  assert.equal(g.run('gameMusic.playCalls'),1);
+  g.run('resetGame()');assert.equal(g.run('gameMusic.paused'),false);
+  g.run('gameMusic.currentTime=12;pauseFromVisibility()');assert.equal(g.run('gameMusic.paused'),true);
+  g.run('resumeFromPause()');assert.equal(g.run('gameMusic.paused'),false);assert.equal(g.run('gameMusic.currentTime'),12);
+  g.run('pauseFromPlatform();jump()');assert.equal(g.run('gameMusic.paused'),true);
+  g.run('resumeFromPlatform()');assert.equal(g.run('gameMusic.paused'),false);
+  g.run('endGame();selectCharacter("nyusia")');assert.equal(g.run('gameMusic.paused'),false);
+  g.run('resetGame()');assert.equal(g.run('gameMusic.currentTime'),0);
+  g.run('document.hidden=true;pauseFromVisibility();resumeFromPause()');assert.equal(g.run('gameMusic.paused'),true);
+});
+
+test('blocked audio playback does not prevent play and retries on the next jump', async () => {
+  const g=game();g.load();
+  g.run('musicRequested=false;gameMusic.play=()=>Promise.reject(Error("autoplay"));resetGame()');
+  await new Promise(setImmediate);
+  assert.equal(g.run('gameState'),'playing');assert.equal(g.run('musicRequested'),false);
+  g.run('gameMusic.play=()=>{gameMusic.paused=false;return Promise.resolve()};jump()');
+  assert.equal(g.run('gameMusic.paused'),false);
+});
+
+test('menu sound preference persists and stays muted across pause and restart', () => {
+  const g = game(); g.load();
+  assert.equal(g.get('soundButton').textContent, 'Звук: вкл.');
+  g.get('soundButton').listeners.click();
+  assert.equal(g.get('soundButton').attributes['aria-pressed'], 'false');
+  g.run('resetGame(); pauseFromPlatform(); resumeFromPlatform(); endGame(); resetGame()');
+  assert.equal(g.run('gameMusic.paused'), true);
+  const again = game(g.saved, {language: 'en'}); again.load();
+  assert.equal(again.get('soundButton').textContent, 'Sound: off');
+  again.get('soundButton').listeners.click();
+  assert.equal(again.run('gameMusic.paused'), false);
+  again.run('resetGame()');
+  assert.equal(again.run('gameMusic.paused'), false);
+  const blocked = game(new Map(), {blocked: true}); blocked.load();
+  blocked.get('soundButton').listeners.click();
+  blocked.run('resetGame()');
+  assert.equal(blocked.run('gameMusic.paused'), true);
+});
+
+test('wide and portrait fields share physics, first obstacle and obstacle stream', () => {
+  const phone = game(), desktop = game(); phone.load(); desktop.load();
+  desktop.run('GAME_WIDTH = WORLD_WIDTH');
+  for (const g of [phone, desktop]) {
+    g.run('Math.random = () => 0.5; resetGame(); update(0)');
+    assert.equal(g.run('obstacles[0].x'), 420);
+    for (let i = 0; i < 300; i++) g.run('cat.y = 260; cat.velocityY = 0; update(16.67)');
+  }
+  assert.deepEqual(desktop.json('obstacles'), phone.json('obstacles'));
+  assert.equal(desktop.run('score'), phone.run('score'));
+  assert.equal(desktop.run('cat.y'), phone.run('cat.y'));
+  assert.equal(desktop.run('gameState'), 'playing');
+  const before = desktop.json('({cat, obstacles, score})');
+  desktop.run('GAME_WIDTH = PORTRAIT_WIDTH; refreshScreen()');
+  assert.deepEqual(desktop.json('({cat, obstacles, score})'), before);
+});
+
+test('wide backgrounds use the complete source without stretching for all heroes', () => {
+  const g = game(); g.load(); g.run('GAME_WIDTH = WORLD_WIDTH');
+  for (const id of ['valencia', 'musia', 'nyusia']) {
+    const c = g.json(`getBackgroundCrop('${id}',1672,941)`);
+    assert.ok(Math.abs(c.width/c.height-16/9)<1e-10);
+    assert.ok(c.width > 1670 && c.height > 940);
+    assert.ok(c.x >= 0 && c.y >= 0);
+  }
+});
+
+test('game over keeps the lost hero scene until the selected next hero starts', () => {
+  const g = game(); g.load();
+  for (const lost of ['valencia', 'musia', 'nyusia']) {
+    g.run(`gameState='start'; selectCharacter('${lost}'); resetGame()`);
+    earn(g, 3); g.run('endGame()');
+    for (const next of ['valencia', 'musia', 'nyusia']) {
+      g.run(`selectCharacter('${next}')`);
+      assert.equal(g.run('selectedCharacter'), next);
+      assert.equal(g.run('sceneCharacterId()'), lost);
+      assert.equal(g.run('lastRun.score'), 3);
+    }
+    g.run('resetGame()');
+    assert.equal(g.run('sceneCharacterId()'), 'nyusia');
+    assert.equal(g.run('score'), 0);
+  }
+});
+
+test('desktop camera places every cat at 40 percent without changing collision distances', () => {
+  const g = game(); g.load();
+  for (const id of ['valencia','musia','nyusia']) {
+    g.run(`gameState='start';selectCharacter('${id}');GAME_WIDTH=WORLD_WIDTH;resetGame();update(0)`);
+    assert.ok(Math.abs(g.run('(cat.x+cat.width/2+getFlightOffset())/GAME_WIDTH')-0.4)<1e-10);
+    assert.equal(g.run('obstacles[0].x-cat.x'),340);
+    const before=g.json('({cat,obstacles})');
+    g.run('GAME_WIDTH=PORTRAIT_WIDTH;refreshScreen()');
+    assert.equal(g.run('getFlightOffset()'),0);
+    assert.deepEqual(g.json('({cat,obstacles})'),before);
   }
 });

@@ -1,4 +1,6 @@
-const GAME_WIDTH = 420;
+const PORTRAIT_WIDTH = 420;
+const WORLD_WIDTH = 640 * 16 / 9;
+let GAME_WIDTH = PORTRAIT_WIDTH;
 const GAME_HEIGHT = 640;
 const DEFAULT_LANGUAGE = "en";
 const RUSSIAN_FALLBACK_LANGUAGES = ["ru", "be", "kk", "uk", "uz"];
@@ -16,6 +18,8 @@ const TEXTS = {
     chooseHero: "Выбери героя",
     lastScore: "Последний счёт",
     startButton: "Играть",
+    soundOn: "Звук: вкл.",
+    soundOff: "Звук: выкл.",
     controlsHint: "Клик / Тап / Пробел",
     pauseTitle: "Пауза",
     pauseLine: "Игра приостановлена",
@@ -38,6 +42,8 @@ const TEXTS = {
     chooseHero: "Choose your hero",
     lastScore: "Last score",
     startButton: "Play",
+    soundOn: "Sound: on",
+    soundOff: "Sound: off",
     controlsHint: "Tap / Click / Space",
     pauseTitle: "Paused",
     pauseLine: "Game paused",
@@ -303,6 +309,7 @@ function setupCanvasResolution() {
       return;
     }
 
+    GAME_WIDTH = GAME_HEIGHT * displayWidth / displayHeight;
     const pixelWidth = Math.round(displayWidth * dpr);
     const pixelHeight = Math.round(displayHeight * dpr);
 
@@ -407,6 +414,44 @@ let score = 0;
 let gameState = "loading"; // loading | start | playing | gameOver
 let isPausedByVisibility = false;
 let isPausedByPlatform = false;
+const AD_INTERVAL_MS = 180000;
+let lastAdTime = performance.now();
+let pendingAd = null;
+
+function completeAdRestart() {
+  if (!pendingAd?.closed || isPausedByPlatform) return;
+  pendingAd = null;
+  resetGame();
+  canvas.focus({ preventScroll: true });
+}
+
+function requestGameStart() {
+  if (pendingAd || isPausedByPlatform || !["start", "gameOver"].includes(gameState)) return;
+  const now = performance.now();
+  if (gameState !== "gameOver" || now - lastAdTime < AD_INTERVAL_MS || !ysdk?.adv?.showFullscreenAdv) {
+    resetGame();
+    return;
+  }
+  lastAdTime = now;
+  const request = { closed: false };
+  pendingAd = request;
+  refreshScreen();
+  const finish = () => {
+    if (pendingAd !== request || request.closed) return;
+    request.closed = true;
+    lastAdTime = performance.now();
+    completeAdRestart();
+  };
+  try {
+    ysdk.adv.showFullscreenAdv({ callbacks: {
+      onClose: finish,
+      onError: finish
+    } });
+  } catch (_) {
+    finish();
+  }
+}
+
 let wasGameplayActiveBeforePlatformPause = false;
 let obstacleElapsedTime = null;
 let lastFrameTime = 0;
@@ -460,7 +505,7 @@ function saveBestScore(value) {
 }
 
 function selectCharacter(id) {
-  if (!CHARACTER_IDS.includes(id) || !["start", "gameOver"].includes(gameState)) return;
+  if (pendingAd || isPausedByPlatform || !CHARACTER_IDS.includes(id) || !["start", "gameOver"].includes(gameState)) return;
   selectedCharacter = id;
   images = characterImages[id];
   bestScore = bestScores[id];
@@ -469,6 +514,12 @@ function selectCharacter(id) {
 }
 
 function setupCharacterMenu() {
+  document.getElementById("soundButton").addEventListener("click", () => {
+    soundEnabled = !soundEnabled;
+    try { localStorage.setItem("kotolyot:soundEnabled", String(soundEnabled)); } catch (_) { /* The setting still works for this session. */ }
+    syncGameMusic();
+    syncCharacterMenu();
+  });
   const picker = document.getElementById("heroPicker");
   for (const id of CHARACTER_IDS) {
     const button = document.createElement("button");
@@ -491,7 +542,7 @@ function setupCharacterMenu() {
   }
   document.getElementById("playButton").addEventListener("click", () => {
     if (!["start", "gameOver"].includes(gameState)) return;
-    resetGame();
+    requestGameStart();
     canvas.focus({ preventScroll: true });
   });
 }
@@ -500,7 +551,10 @@ function syncCharacterMenu() {
   const menu = document.getElementById("characterMenu");
   if (!menu) return;
   menu.hidden = !["start", "gameOver"].includes(gameState);
-  document.getElementById("playButton").disabled = isPausedByPlatform;
+  document.getElementById("playButton").disabled = isPausedByPlatform || !!pendingAd;
+  const soundButton = document.getElementById("soundButton");
+  soundButton.textContent = soundEnabled ? TEXT.soundOn : TEXT.soundOff;
+  soundButton.setAttribute("aria-pressed", String(soundEnabled));
   if (menu.hidden) return;
   const isOver = gameState === "gameOver";
   document.getElementById("menuTitle").textContent = isOver ? TEXT.gameOverTitle : TEXT.gameTitle;
@@ -515,6 +569,7 @@ function syncCharacterMenu() {
     const id = button.dataset.hero;
     const pose = isOver && lastRun?.characterId === id ? "catSleep" : "catIdle";
     button.querySelector(".hero-portrait").src = ASSETS[id][pose];
+    button.dataset.pose = pose;
     button.setAttribute("aria-pressed", String(id === selectedCharacter));
     button.querySelector(".hero-name").textContent = characterName(id);
     button.querySelector(".hero-best").textContent = `${TEXT.best}: ${bestScores[id]}`;
@@ -683,15 +738,46 @@ function loadImages() {
   });
 }
 
+// Music plays in menus and flight, but pauses with the app and platform ads.
+const gameMusic = typeof Audio !== "undefined" ? new Audio("assets/audio/cozy-cat-adventure.mp3") : null;
+let soundEnabled = true;
+try { soundEnabled = localStorage.getItem("kotolyot:soundEnabled") !== "false"; } catch (_) { /* Storage may be unavailable. */ }
+let musicRequested = false;
+let musicWindowFocused = true;
+if (gameMusic) {
+  gameMusic.loop = true;
+  gameMusic.volume = 0.35;
+  gameMusic.preload = "none";
+}
+
+function syncGameMusic() {
+  if (!gameMusic) return;
+  const audibleState = ["start", "gameOver"].includes(gameState) || isActiveGameplay();
+  if (!soundEnabled || !audibleState || isPausedByPlatform || !musicWindowFocused || document.hidden || pendingAd) {
+    musicRequested = false;
+    gameMusic.pause();
+    return;
+  }
+  if (musicRequested) return;
+  musicRequested = true;
+  try {
+    const playing = gameMusic.play();
+    playing?.catch(() => { musicRequested = false; });
+  } catch (_) {
+    musicRequested = false;
+  }
+}
+
 function resetGame() {
-  if (isPausedByPlatform) return;
+  if (isPausedByPlatform || pendingAd) return;
+  if (gameMusic) gameMusic.currentTime = 0;
   cat.y = 260;
   cat.velocityY = 0;
   obstacles = [];
   score = 0;
   obstacleElapsedTime = null;
   lastFrameTime = 0;
-  isPausedByVisibility = false;
+  isPausedByVisibility = !!document.hidden;
   gameState = "playing";
   startGameplay();
   refreshScreen();
@@ -719,6 +805,7 @@ function stopGameLoop() {
 }
 
 function refreshScreen() {
+  syncGameMusic();
   syncAccessibility();
   draw();
 
@@ -752,6 +839,7 @@ function resumeFromPlatform() {
     stopGameplay();
   }
   refreshScreen();
+  completeAdRestart();
 }
 
 function pauseFromVisibility() {
@@ -822,7 +910,7 @@ function jump() {
   }
 
   if (gameState === "gameOver") {
-    resetGame();
+    requestGameStart();
     return;
   }
 
@@ -831,15 +919,16 @@ function jump() {
   }
 
   cat.velocityY = jumpForce;
+  syncGameMusic();
 }
 
-function spawnObstacle() {
+function spawnObstacle(x = PORTRAIT_WIDTH) {
   const difficulty = getDifficultyForScore(score);
   const { min, max } = getObstacleTopHeightRange({ gap: difficulty.gap });
   const topHeight = randomBetween(min, max);
 
   obstacles.push({
-    x: GAME_WIDTH,
+    x,
     topHeight,
     bottomY: topHeight + difficulty.gap,
     passed: false
@@ -859,15 +948,15 @@ function update(deltaTime) {
   cat.velocityY += gravity * frameFactor;
   cat.y += cat.velocityY * frameFactor;
 
+  // Maintain the same obstacle stream on every screen, including off-screen
+  // previews on phones. Resizing only reveals the existing world.
   if (obstacleElapsedTime === null) {
     obstacleElapsedTime = 0;
     spawnObstacle();
   }
-
-  obstacleElapsedTime += simulationDelta;
-  if (obstacleElapsedTime >= difficulty.spawnInterval) {
-    spawnObstacle();
-    obstacleElapsedTime -= difficulty.spawnInterval;
+  const spacing = difficulty.speed * difficulty.spawnInterval / 16.67;
+  while (obstacles.length && obstacles[obstacles.length - 1].x < WORLD_WIDTH) {
+    spawnObstacle(obstacles[obstacles.length - 1].x + spacing);
   }
 
   for (const obstacle of obstacles) {
@@ -892,7 +981,7 @@ function update(deltaTime) {
   }
 
   obstacles = obstacles.filter(
-    obstacle => obstacle.x + obstacleSettings.width > -40
+    obstacle => obstacle.x + obstacleSettings.width > -WORLD_WIDTH
   );
 
   if (cat.y < -20 || cat.y + cat.height > GAME_HEIGHT - groundHeight + 10) {
@@ -921,13 +1010,29 @@ function endGame() {
   refreshScreen();
 }
 
+function sceneCharacterId() {
+  return gameState === "gameOver" && lastRun ? lastRun.characterId : selectedCharacter;
+}
+
+// Move the camera composition, keeping collisions and obstacle timing unchanged.
+function getFlightOffset() {
+  return GAME_WIDTH > PORTRAIT_WIDTH + 1 ? GAME_WIDTH * 0.4 - (cat.x + cat.width / 2) : 0;
+}
+
 function draw() {
   drawBackground();
 
   if (gameState !== "loading") {
+    const flightOffset = getFlightOffset();
+    ctx.save();
+    ctx.translate(flightOffset, 0);
     drawObstacles();
+    ctx.restore();
     drawGround();
+    ctx.save();
+    ctx.translate(flightOffset, 0);
     drawCat();
+    ctx.restore();
     drawScore();
   }
 
@@ -944,18 +1049,27 @@ function draw() {
   }
 }
 
+const BACKGROUND_START = { valencia: 0, musia: 0.25, nyusia: 0.5 };
+
+function getBackgroundCrop(id, imageWidth, imageHeight) {
+  if (GAME_WIDTH > PORTRAIT_WIDTH + 1) {
+    const width = Math.min(imageWidth, imageHeight * GAME_WIDTH / GAME_HEIGHT);
+    const height = width * GAME_HEIGHT / GAME_WIDTH;
+    return { x: (imageWidth - width) / 2, y: (imageHeight - height) / 2, width, height };
+  }
+  const x = imageWidth * (BACKGROUND_START[id] ?? 0);
+  const width = Math.min(imageHeight * GAME_WIDTH / GAME_HEIGHT, imageWidth - x);
+  const height = width * GAME_HEIGHT / GAME_WIDTH;
+  return { x, y: (imageHeight - height) / 2, width, height };
+}
+
 function drawBackground() {
-  if (images.background && images.background.complete && images.background.naturalWidth > 0) {
-    const background = images.background;
-    if (selectedCharacter === "musia") {
-      // Cover the playfield without squeezing the original landscape image.
-      const scale = Math.max(GAME_WIDTH / background.naturalWidth, GAME_HEIGHT / background.naturalHeight);
-      const width = background.naturalWidth * scale;
-      const height = background.naturalHeight * scale;
-      ctx.drawImage(background, (GAME_WIDTH - width) / 2, (GAME_HEIGHT - height) / 2, width, height);
-    } else {
-      ctx.drawImage(background, 0, 0, GAME_WIDTH, GAME_HEIGHT);
-    }
+  const images = characterImages[sceneCharacterId()];
+  const background = images.background;
+  if (background && background.complete && background.naturalWidth > 0 && background.naturalHeight > 0) {
+    const crop = getBackgroundCrop(sceneCharacterId(), background.naturalWidth, background.naturalHeight);
+    ctx.drawImage(background, crop.x, crop.y, crop.width, crop.height,
+      0, 0, GAME_WIDTH, GAME_HEIGHT);
   } else {
     ctx.fillStyle = "#f7ead7";
     ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
@@ -980,13 +1094,14 @@ const GROUND_CROPS = {
 };
 
 function drawGround() {
+  const images = characterImages[sceneCharacterId()];
   const groundY = GAME_HEIGHT - groundHeight + groundSettings.yOffset;
 
   // Подложка под ковер, чтобы через прозрачные части не было видно room/когтеточку
   ctx.fillStyle = groundSettings.coverColor;
   ctx.fillRect(0, groundY + 18, GAME_WIDTH, GAME_HEIGHT - groundY);
 
-  const crop = GROUND_CROPS[selectedCharacter];
+  const crop = GROUND_CROPS[sceneCharacterId()];
   if (crop) {
     // Scale by the ground height and center in game coordinates, independent of CSS size.
     const width = Math.max(
@@ -1039,7 +1154,7 @@ const CHARACTER_POSE_CROPS = {
 
 function drawCat() {
   const pose = getCurrentCatPose();
-  const id = gameState === "gameOver" && lastRun ? lastRun.characterId : selectedCharacter;
+  const id = sceneCharacterId();
   const catImage = characterImages[id][pose];
   const crop = CHARACTER_POSE_CROPS[id]?.[pose];
   if (crop) {
@@ -1066,6 +1181,7 @@ function getCurrentCatImage() {
 }
 
 function drawObstacles() {
+  const images = characterImages[sceneCharacterId()];
   const groundTopY = GAME_HEIGHT - groundHeight + groundSettings.yOffset;
 
   for (const obstacle of obstacles) {
@@ -1073,7 +1189,7 @@ function drawObstacles() {
       obstacle.topHeight - obstacleSettings.renderHeight + obstacleSettings.topInset;
 
     ctx.save();
-    const flipTop = CHARACTERS[selectedCharacter].flipTop;
+    const flipTop = CHARACTERS[sceneCharacterId()].flipTop;
     if (flipTop) {
       ctx.translate(0, topY + obstacleSettings.renderHeight);
       ctx.scale(1, -1);
@@ -1105,14 +1221,23 @@ function drawObstacles() {
 }
 
 function drawScore() {
-  drawRoundedRect(12, 12, GAME_WIDTH - 24, 76, 12, "rgba(255, 248, 238, 0.88)");
+  const label = `${characterName(sceneCharacterId())} · ${TEXT.best}: ${bestScores[sceneCharacterId()]}`;
+  let panelWidth = Math.min(GAME_WIDTH - 24, 396);
+  if (GAME_WIDTH > PORTRAIT_WIDTH + 1) {
+    ctx.font = "16px Arial";
+    const labelWidth = ctx.measureText(label)?.width ?? label.length * 9;
+    ctx.font = "bold 34px Arial";
+    const scoreWidth = ctx.measureText(String(score))?.width ?? String(score).length * 22;
+    panelWidth = Math.min(GAME_WIDTH - 24, Math.max(labelWidth, scoreWidth) + 24);
+  }
+  drawRoundedRect(12, 12, panelWidth, 76, 12, "rgba(255, 248, 238, 0.88)");
   ctx.fillStyle = "#5a3a24";
   ctx.font = "bold 34px Arial";
   ctx.textAlign = "left";
   ctx.fillText(String(score), 22, 48);
 
   ctx.font = "16px Arial";
-  ctx.fillText(`${characterName()} · ${TEXT.best}: ${bestScore}`, 22, 76);
+  ctx.fillText(label, 22, 76);
 }
 
 function drawLoadingScreen() {
@@ -1238,6 +1363,12 @@ function getAccessibilityStatusText() {
 }
 
 function syncAccessibility() {
+  const loadingScreen = document.getElementById("loadingScreen");
+  if (loadingScreen) loadingScreen.hidden = gameState !== "loading";
+  const loadingTitle = document.getElementById("loadingTitle");
+  if (loadingTitle) loadingTitle.textContent = TEXT.gameTitle;
+  const loadingLabel = document.getElementById("loadingLabel");
+  if (loadingLabel) loadingLabel.textContent = TEXT.loading.replace(/\.{3}$/, "");
   syncCharacterMenu();
   const statusElement = document.getElementById("gameStatus");
   const instructionsElement = document.getElementById("gameInstructions");
@@ -1334,11 +1465,21 @@ document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
     pauseFromVisibility();
   }
+  syncGameMusic();
 });
 
 window.addEventListener("blur", () => {
+  musicWindowFocused = false;
   pauseFromVisibility();
+  syncGameMusic();
 });
+window.addEventListener("focus", () => {
+  musicWindowFocused = true;
+  syncGameMusic();
+});
+// Retry after a user gesture when the browser blocks initial autoplay.
+document.addEventListener("click", syncGameMusic);
+document.addEventListener("keydown", syncGameMusic);
 
 async function startApp() {
   preventNativeUiEvents();

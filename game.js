@@ -11,6 +11,9 @@ const TEXTS = {
     pageTitle: "Котолёт",
     gameTitle: "Котолёт",
     loading: "Загрузка...",
+    loadingFailed: "Не удалось загрузить игру.\nПроверь подключение и попробуй ещё раз.",
+    loadingFailedMobile: "Не удалось загрузить игру.\nПроверь подключение\nи попробуй ещё раз.",
+    loadingRetry: "Повторить",
     best: "Рекорд",
     score: "Счёт",
     startLine1: "Помоги котику пролететь",
@@ -35,6 +38,9 @@ const TEXTS = {
     pageTitle: "Cat Flight",
     gameTitle: "Cat Flight",
     loading: "Loading...",
+    loadingFailed: "The game could not load.\nCheck your connection and try again.",
+    loadingFailedMobile: "The game could not load.\nCheck your connection\nand try again.",
+    loadingRetry: "Retry",
     best: "Best",
     score: "Score",
     startLine1: "Help the kitty fly",
@@ -295,6 +301,7 @@ function preventNativeUiEvents() {
 
 let ysdk = null;
 let isYandexSDKReady = false;
+let isYandexSDKInitializing = false;
 let isGameReadySent = false;
 let isGameplayStarted = false;
 
@@ -412,6 +419,8 @@ const obstacleSettings = {
 let obstacles = [];
 let score = 0;
 let gameState = "loading"; // loading | start | playing | gameOver
+let loadingFailed = false;
+let loadingProgress = "";
 let isPausedByVisibility = false;
 let isPausedByPlatform = false;
 const AD_INTERVAL_MS = 180000;
@@ -542,6 +551,9 @@ function setupCharacterMenu() {
   }
   document.getElementById("playButton").addEventListener("click", () => {
     if (!["start", "gameOver"].includes(gameState)) return;
+    if (isPausedByPlatform || pendingAd) return;
+    // Invoke within the user gesture; fullscreen must never delay game startup.
+    void requestGameFullscreen();
     requestGameStart();
     canvas.focus({ preventScroll: true });
   });
@@ -630,12 +642,24 @@ window.addEventListener("unhandledrejection", event => {
   trackError("unhandledrejection", event.reason);
 });
 
+async function requestGameFullscreen() {
+  try {
+    const fullscreen = ysdk?.screen?.fullscreen;
+    if (typeof fullscreen?.request !== "function" || fullscreen.status === "on") return;
+    await fullscreen.request();
+  } catch (error) {
+    console.warn("Не удалось включить полноэкранный режим:", error);
+  }
+}
+
 async function initYandexSDK() {
+  if (isYandexSDKReady || isYandexSDKInitializing) return;
   if (typeof YaGames === "undefined") {
     console.warn("Yandex Games SDK не найден. Локальный режим без SDK.");
     return;
   }
 
+  isYandexSDKInitializing = true;
   try {
     ysdk = await YaGames.init();
     isYandexSDKReady = true;
@@ -648,6 +672,8 @@ async function initYandexSDK() {
     console.log("Yandex Games SDK initialized");
   } catch (error) {
     console.warn("Не удалось инициализировать Yandex Games SDK:", error);
+  } finally {
+    isYandexSDKInitializing = false;
   }
 }
 
@@ -702,9 +728,26 @@ function loadImages() {
   );
   let settledCount = 0;
   const failedAssets = [];
+  const pendingAssets = new Set(entries);
+  let stallTimer;
+  function armStallTimer() {
+    clearTimeout(stallTimer);
+    stallTimer = setTimeout(() => {
+      loadingFailed = true;
+      console.warn("Загрузка изображений остановилась:", [...pendingAssets].map(entry => entry.src));
+      syncAccessibility();
+    }, 30000);
+  }
+  loadingProgress = `0 / ${entries.length}`;
+  syncAccessibility();
+  armStallTimer();
 
-  function onAssetSettled(key, src, isSuccess) {
+  function onAssetSettled(entry, isSuccess) {
+    if (!pendingAssets.delete(entry)) return;
+    const { src } = entry;
     settledCount += 1;
+    loadingProgress = `${settledCount} / ${entries.length}`;
+    clearTimeout(stallTimer);
 
     if (!isSuccess) {
       failedAssets.push(src);
@@ -713,28 +756,36 @@ function loadImages() {
 
     if (settledCount === entries.length) {
       if (failedAssets.length > 0) {
-        console.warn("Игра запущена без части ассетов:", failedAssets);
+        loadingFailed = true;
+        console.warn("Не удалось загрузить файлы игры:", failedAssets);
+        syncAccessibility();
+        return;
       }
 
+      loadingFailed = false;
       gameState = "start";
       sendGameReady();
       refreshScreen();
+    } else {
+      syncAccessibility();
+      armStallTimer();
     }
   }
 
-  entries.forEach(({ id, key, src }) => {
+  entries.forEach(entry => {
+    const { id, key, src } = entry;
     const image = new Image();
 
     image.onload = () => {
-      onAssetSettled(key, src, true);
+      onAssetSettled(entry, true);
     };
 
     image.onerror = () => {
-      onAssetSettled(key, src, false);
+      onAssetSettled(entry, false);
     };
 
-    image.src = src;
     characterImages[id][key] = image;
+    image.src = src;
   });
 }
 
@@ -1049,7 +1100,7 @@ function draw() {
   }
 }
 
-const BACKGROUND_START = { valencia: 0, musia: 0.25, nyusia: 0.5 };
+const BACKGROUND_START = { valencia: 0.1, musia: 0.25, nyusia: 0.5 };
 
 function getBackgroundCrop(id, imageWidth, imageHeight) {
   if (GAME_WIDTH > PORTRAIT_WIDTH + 1) {
@@ -1064,10 +1115,10 @@ function getBackgroundCrop(id, imageWidth, imageHeight) {
 }
 
 function drawBackground() {
-  const images = characterImages[sceneCharacterId()];
+  const images = characterImages[selectedCharacter];
   const background = images.background;
   if (background && background.complete && background.naturalWidth > 0 && background.naturalHeight > 0) {
-    const crop = getBackgroundCrop(sceneCharacterId(), background.naturalWidth, background.naturalHeight);
+    const crop = getBackgroundCrop(selectedCharacter, background.naturalWidth, background.naturalHeight);
     ctx.drawImage(background, crop.x, crop.y, crop.width, crop.height,
       0, 0, GAME_WIDTH, GAME_HEIGHT);
   } else {
@@ -1094,14 +1145,14 @@ const GROUND_CROPS = {
 };
 
 function drawGround() {
-  const images = characterImages[sceneCharacterId()];
+  const images = characterImages[selectedCharacter];
   const groundY = GAME_HEIGHT - groundHeight + groundSettings.yOffset;
 
   // Подложка под ковер, чтобы через прозрачные части не было видно room/когтеточку
   ctx.fillStyle = groundSettings.coverColor;
   ctx.fillRect(0, groundY + 18, GAME_WIDTH, GAME_HEIGHT - groundY);
 
-  const crop = GROUND_CROPS[sceneCharacterId()];
+  const crop = GROUND_CROPS[selectedCharacter];
   if (crop) {
     // Scale by the ground height and center in game coordinates, independent of CSS size.
     const width = Math.max(
@@ -1181,7 +1232,7 @@ function getCurrentCatImage() {
 }
 
 function drawObstacles() {
-  const images = characterImages[sceneCharacterId()];
+  const images = characterImages[selectedCharacter];
   const groundTopY = GAME_HEIGHT - groundHeight + groundSettings.yOffset;
 
   for (const obstacle of obstacles) {
@@ -1189,7 +1240,7 @@ function drawObstacles() {
       obstacle.topHeight - obstacleSettings.renderHeight + obstacleSettings.topInset;
 
     ctx.save();
-    const flipTop = CHARACTERS[sceneCharacterId()].flipTop;
+    const flipTop = CHARACTERS[selectedCharacter].flipTop;
     if (flipTop) {
       ctx.translate(0, topY + obstacleSettings.renderHeight);
       ctx.scale(1, -1);
@@ -1368,7 +1419,16 @@ function syncAccessibility() {
   const loadingTitle = document.getElementById("loadingTitle");
   if (loadingTitle) loadingTitle.textContent = TEXT.gameTitle;
   const loadingLabel = document.getElementById("loadingLabel");
-  if (loadingLabel) loadingLabel.textContent = TEXT.loading.replace(/\.{3}$/, "");
+  if (loadingLabel) loadingLabel.textContent = loadingFailed
+    ? (GAME_WIDTH <= PORTRAIT_WIDTH + 1 ? TEXT.loadingFailedMobile : TEXT.loadingFailed)
+    : `${TEXT.loading.replace(/\.{3}$/, "")} ${loadingProgress}`.trim();
+  const loadingDots = document.getElementById("loadingDots");
+  if (loadingDots) loadingDots.hidden = loadingFailed;
+  const loadingRetry = document.getElementById("loadingRetry");
+  if (loadingRetry) {
+    loadingRetry.hidden = !loadingFailed;
+    loadingRetry.textContent = TEXT.loadingRetry;
+  }
   syncCharacterMenu();
   const statusElement = document.getElementById("gameStatus");
   const instructionsElement = document.getElementById("gameInstructions");
@@ -1482,6 +1542,11 @@ document.addEventListener("click", syncGameMusic);
 document.addEventListener("keydown", syncGameMusic);
 
 async function startApp() {
+  document.getElementById("loadingRetry")?.addEventListener("click", () => location.reload());
+  document.getElementById("yandexSDK")?.addEventListener("load", async () => {
+    await initYandexSDK();
+    applyLanguage();
+  });
   preventNativeUiEvents();
   setupCharacterMenu();
   setupCanvasResolution();

@@ -9,6 +9,8 @@ const source = fs.readFileSync(path.join(root, 'game.js'), 'utf8');
 
 function game(saved = new Map(), { blocked = false, sdk = false, language = 'ru' } = {}) {
   const pendingImages = [], sdkCalls = [], noop = () => {};
+  const timers = new Map();
+  let timerId = 0, reloads = 0;
   let resolveSDK;
   const sdkListeners = new Map();
   let sdkWasPlaying = false;
@@ -28,7 +30,9 @@ function game(saved = new Map(), { blocked = false, sdk = false, language = 'ru'
   const sandbox = {
     console: { log: noop, warn: noop, error: noop },
     document: { getElementById: get, createElement: () => new Element(), querySelector: () => new Element(), querySelectorAll: () => get('heroPicker').children, body: new Element(), documentElement: {}, addEventListener: noop },
-    window: { addEventListener: noop }, navigator: { language }, location: { href: 'test' },
+    window: { addEventListener: noop }, navigator: { language }, location: { href: 'test', reload: () => reloads++ },
+    setTimeout: (callback, delay) => { timers.set(++timerId, { callback, delay }); return timerId; },
+    clearTimeout: id => timers.delete(id),
     localStorage: { getItem: k => { if (blocked) throw Error('blocked'); return saved.get(k) ?? null; }, setItem: (k, v) => { if (blocked) throw Error('blocked'); saved.set(k, v); } },
     performance: { now: () => 1000 }, requestAnimationFrame: () => 1, cancelAnimationFrame: noop,
     Audio: class {
@@ -42,7 +46,8 @@ function game(saved = new Map(), { blocked = false, sdk = false, language = 'ru'
   vm.createContext(sandbox);
   vm.runInContext(source, sandbox);
   const run = code => vm.runInContext(code, sandbox);
-  return { run, saved, get, sdkCalls, platform: event => {
+  return { run, saved, get, sdkCalls, pendingImages, timers, reloads: () => reloads,
+    stall: () => { const pending = [...timers.values()]; timers.clear(); pending.forEach(t => t.callback()); }, platform: event => {
     if (event === 'game_api_pause') {
       sdkWasPlaying = run('isGameplayStarted');
       if (sdkWasPlaying) sdkCalls.push('stop');
@@ -51,6 +56,86 @@ function game(saved = new Map(), { blocked = false, sdk = false, language = 'ru'
     sdkListeners.get(event)();
   }, resolveSDK: () => resolveSDK(), load: () => pendingImages.forEach(i => i.onload()), json: code => JSON.parse(run(`JSON.stringify(${code})`)) };
 }
+
+test('a stalled image shows recovery instead of endless loading and can finish late', () => {
+  const g = game();
+  g.pendingImages.slice(1).forEach(i => i.onload());
+  assert.equal(g.run('gameState'), 'loading');
+  assert.equal(g.get('loadingRetry').hidden, true);
+  assert.equal(g.timers.size, 1);
+  assert.equal([...g.timers.values()][0].delay, 30000);
+  g.stall();
+  assert.equal(g.get('loadingRetry').hidden, false);
+  assert.equal(g.get('loadingDots').hidden, true);
+  assert.match(g.get('loadingLabel').textContent, /Не удалось/);
+  g.get('loadingRetry').listeners.click();
+  assert.equal(g.reloads(), 1);
+  g.pendingImages[0].onload();
+  assert.equal(g.run('gameState'), 'start');
+  assert.equal(g.get('loadingScreen').hidden, true);
+  assert.equal(g.timers.size, 0);
+  g.get('playButton').listeners.click();
+  g.pendingImages[0].onload();
+  assert.equal(g.run('gameState'), 'playing');
+});
+
+test('failed images offer retry without starting an incomplete game', () => {
+  const g = game();
+  g.pendingImages[0].onerror();
+  g.pendingImages.slice(1).forEach(i => i.onload());
+  assert.equal(g.run('gameState'), 'loading');
+  assert.equal(g.get('loadingRetry').hidden, false);
+  assert.equal(g.get('characterMenu').hidden, true);
+  assert.equal(g.timers.size, 0);
+});
+
+test('late SDK script initializes once after assets and gameplay have started', async () => {
+  const g = game(); g.load();
+  g.get('playButton').listeners.click();
+  g.run('var initCalls = 0; var YaGames = { init: async () => { initCalls++; return {features: {}}; } };');
+  await Promise.all([g.get('yandexSDK').listeners.load(), g.get('yandexSDK').listeners.load()]);
+  assert.equal(g.run('initCalls'), 1);
+  assert.equal(g.run('isYandexSDKReady'), true);
+  assert.equal(g.run('gameState'), 'playing');
+  assert.equal(g.get('loadingScreen').hidden, true);
+});
+
+test('Play requests fullscreen synchronously with its receiver and starts without waiting', () => {
+  const g = game(); g.load();
+  g.run(`ysdk = { screen: { fullscreen: {
+    status: 'off', calls: 0,
+    request() { this.calls++; this.stateAtRequest = gameState; return new Promise(() => {}); }
+  } } }`);
+  assert.equal(g.run('ysdk.screen.fullscreen.calls'), 0);
+  g.get('playButton').listeners.click();
+  assert.equal(g.run('ysdk.screen.fullscreen.calls'), 1);
+  assert.equal(g.run('ysdk.screen.fullscreen.stateAtRequest'), 'start');
+  assert.equal(g.run('gameState'), 'playing');
+});
+
+test('Play still starts with absent, unavailable, throwing or rejecting fullscreen API', async () => {
+  for (const sdk of [
+    'null', '{}', '{ screen: {} }',
+    '{ screen: { fullscreen: { request: true } } }',
+    '{ screen: { fullscreen: { request() { throw Error("denied"); } } } }',
+    '{ screen: { fullscreen: { request() { return Promise.reject(Error("denied")); } } } }'
+  ]) {
+    const g = game(); g.load(); g.run(`ysdk = ${sdk}`);
+    g.get('playButton').listeners.click();
+    assert.equal(g.run('gameState'), 'playing');
+    await new Promise(resolve => setImmediate(resolve));
+  }
+});
+
+test('Play skips fullscreen when already on or game startup is blocked', () => {
+  for (const setup of ['ysdk.screen.fullscreen.status = "on"', 'isPausedByPlatform = true', 'pendingAd = {}', 'gameState = "playing"']) {
+    const g = game(); g.load();
+    g.run('ysdk = { screen: { fullscreen: { status: "off", calls: 0, request() { this.calls++; } } } }');
+    g.run(setup);
+    g.get('playButton').listeners.click();
+    assert.equal(g.run('ysdk.screen.fullscreen.calls'), 0);
+  }
+});
 
 function earn(g, points) {
   // Pass real obstacle scoring checks without depending on frame scheduling.
@@ -280,7 +365,7 @@ test('ad close and platform resume work in either order, including hidden tabs a
 
 test('room backgrounds retain aspect ratio and start at the requested source positions', () => {
   const g=game();
-  for (const [id,start] of [['valencia',0],['musia',0.25],['nyusia',0.5]]) {
+  for (const [id,start] of [['valencia',0.1],['musia',0.25],['nyusia',0.5]]) {
     const data=fs.readFileSync(path.join(root,g.run(`ASSETS.${id}.background`)));
     const width=data.readUInt32BE(16),height=data.readUInt32BE(20);
     const crop=g.json(`getBackgroundCrop('${id}',${width},${height})`);
@@ -362,7 +447,52 @@ test('wide backgrounds use the complete source without stretching for all heroes
   }
 });
 
-test('game over keeps the lost hero scene until the selected next hero starts', () => {
+test('background follows hero selection before and after a run at both screen widths', () => {
+  const g = game(); g.load();
+  g.run(`var drawnBackground;
+    for (const assets of Object.values(characterImages)) assets.background.naturalHeight = 941;
+    ctx.drawImage = image => { drawnBackground = image.src; };`);
+  for (const width of ['PORTRAIT_WIDTH', 'WORLD_WIDTH']) {
+    g.run(`GAME_WIDTH = ${width}; gameState = 'start'`);
+    for (const id of ['valencia', 'musia', 'nyusia']) {
+      g.get('heroPicker').children.find(button => button.dataset.hero === id).listeners.click();
+      g.run('drawBackground()');
+      assert.equal(g.run('drawnBackground'), g.run(`ASSETS.${id}.background`));
+    }
+    g.run('resetGame(); endGame()');
+    for (const id of ['valencia', 'musia', 'nyusia']) {
+      g.get('heroPicker').children.find(button => button.dataset.hero === id).listeners.click();
+      g.run('drawBackground()');
+      assert.equal(g.run('drawnBackground'), g.run(`ASSETS.${id}.background`));
+      assert.equal(g.run('lastRun.characterId'), 'nyusia');
+    }
+  }
+});
+
+test('rugs and obstacles follow selection with matching crops and orientation', () => {
+  const g = game(); g.load();
+  g.run(`var drawn = [], flips = [];
+    ctx.drawImage = (image, ...args) => drawn.push({src: image.src, args});
+    ctx.scale = (...args) => flips.push(args);`);
+  for (const width of ['PORTRAIT_WIDTH', 'WORLD_WIDTH']) {
+    g.run(`GAME_WIDTH = ${width}; gameState = 'start'; resetGame(); endGame();
+      obstacles = [{x: 250, topHeight: 120, bottomY: 369, passed: false}];`);
+    const before = g.json('({obstacles, lastRun, score})');
+    for (const id of ['valencia', 'musia', 'nyusia', 'valencia']) {
+      g.get('heroPicker').children.find(button => button.dataset.hero === id).listeners.click();
+      g.run('drawn = []; flips = []; drawGround(); drawObstacles()');
+      const drawn = g.json('drawn');
+      assert.deepEqual(drawn.map(d => d.src), g.json(`[ASSETS.${id}.ground, ASSETS.${id}.obstacleTop, ASSETS.${id}.obstacleBottom]`));
+      const crop = g.json(`GROUND_CROPS.${id} || null`);
+      if (crop) assert.deepEqual(drawn[0].args.slice(0,4), [crop.x,crop.y,crop.width,crop.height]);
+      else assert.equal(drawn[0].args.length, 4);
+      assert.deepEqual(g.json('flips'), id === 'valencia' ? [] : [[1,-1]]);
+      assert.deepEqual(g.json('({obstacles, lastRun, score})'), before);
+    }
+  }
+});
+
+test('game over keeps the lost hero and result until the selected next hero starts', () => {
   const g = game(); g.load();
   for (const lost of ['valencia', 'musia', 'nyusia']) {
     g.run(`gameState='start'; selectCharacter('${lost}'); resetGame()`);

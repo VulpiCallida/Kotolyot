@@ -220,6 +220,10 @@ canvas:focus-visible {
 
 /* Keep the loading overlay hidden after the assets have settled. */
 .loading-screen[hidden] { display: none; }
+.loading-dots[hidden] { display: none; }
+.loading-screen .loading-label { text-align: center; max-width: 90%; }
+#loadingLabel { white-space: pre-line; }
+#loadingRetry { pointer-events: auto; margin-top: 0; }
 
 
 .menu-actions { display: flex; align-items: stretch; justify-content: center; gap: 2cqw; margin-top: 6cqw; }

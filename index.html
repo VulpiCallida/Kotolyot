@@ -7,17 +7,18 @@
   <link rel="stylesheet" href="style.css" />
 
   <!-- Yandex Games SDK -->
-  <script src="/sdk.js"></script>
+  <script id="yandexSDK" src="/sdk.js" async></script>
 </head>
 <body>
   <main class="page">
     <h1 id="pageTitle" class="sr-only">Cat Flight</h1>
 
     <div class="game-stage">
-    <div id="loadingScreen" class="loading-screen" aria-hidden="true">
+    <div id="loadingScreen" class="loading-screen" aria-live="polite">
       <div id="loadingTitle" class="loading-title">Cat Flight</div>
       <img class="loading-icon" src="icon.png" alt="" draggable="false" fetchpriority="high" />
-      <div class="loading-label"><span id="loadingLabel">Loading</span><span class="loading-dots"><span>.</span><span>.</span><span>.</span></span></div>
+      <div class="loading-label"><span id="loadingLabel">Loading</span><span id="loadingDots" class="loading-dots"><span>.</span><span>.</span><span>.</span></span></div>
+      <button id="loadingRetry" class="play-button" type="button" hidden>Retry</button>
       <div class="loading-developer">Krovikov Family</div>
     </div>
     <canvas
